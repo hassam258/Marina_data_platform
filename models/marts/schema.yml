@@ -1,0 +1,55 @@
+version: 2
+
+models:
+  - name: mrt_executive_kpis
+    description: >
+      Executive KPI mart, tidy/long, incremental with history. Reads aggregates only -
+      never the billion-row fact tables.
+    meta:
+      owner: hassamuddin19708@gmail.com
+      contains_pii: false
+    columns:
+      - name: kpi_key
+        tests:
+          - not_null
+          - unique:
+              config:
+                where: "metric_date >= dateadd(day, -7, current_date)"
+      - name: metric_date
+        tests: [not_null]
+      - name: metric_domain
+        tests:
+          - not_null
+          - accepted_values: {values: ['Revenue', 'Vendor Operations', 'Vendor Response Time']}
+      - name: metric_grain
+        tests:
+          - not_null
+          - accepted_values: {values: ['company', 'vendor', 'period']}
+      - name: grain_value
+        tests: [not_null]
+      - name: metric_unit
+        tests:
+          - not_null
+          - accepted_values: {values: ['USD', 'hours', 'count', 'ratio']}
+
+  - name: mrt_data_quality
+    description: >
+      Daily quality scoreboard. At scale, quality management is observation of rates over
+      time rather than assertion on every row.
+    columns:
+      - name: check_key
+        tests: [not_null, unique]
+      - name: check_name
+        tests: [not_null]
+      - name: failing_rate
+        tests:
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 1, inclusive: true}
+
+  - name: mrt_unmapped_services
+    description: Ranked vocabulary of unmapped service strings - the seed maintenance queue.
+    columns:
+      - name: raw_service_type
+        tests: [not_null, unique]
+      - name: job_count
+        tests: [not_null]
+

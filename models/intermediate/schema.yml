@@ -1,0 +1,131 @@
+version: 2
+
+models:
+  - name: int_subscription_state
+    description: >
+      Current state per subscription, maintained by merge. Exists so nothing downstream
+      sorts the full event log.
+    columns:
+      - name: sub_id
+        tests: [not_null, unique]
+      - name: event_timestamp_utc
+        tests: [not_null]
+      - name: normalized_mrr_amount
+        tests:
+          - dbt_utils.accepted_range: {min_value: 0, inclusive: true, config: {severity: warn}}
+
+  - name: int_identity_keys
+    description: >
+      Type-prefixed edge list for identity resolution, with per-key frequency and the
+      poisoned-key flag. The frequency cap is what stops one data-entry default from
+      collapsing the customer base into a single owner.
+    meta: {contains_pii: true, masking_policies: []}
+    columns:
+      - name: node_id
+        tests: [not_null]
+      - name: key_id
+        tests: [not_null]
+      - name: key_type
+        tests:
+          - not_null
+          - accepted_values: {values: ['email', 'phone', 'hull']}
+      - name: is_poisoned_key
+        description: >
+          True when a key is shared by more than max_nodes_per_key records. Warn-level:
+          a rising count means the source is accumulating default values.
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: "= false"
+              config: {severity: warn}
+      - name: key_value
+        description: >
+          NOT column-masked - mixes email/phone/hull values under one type-tagged column,
+          which a single Snowflake masking policy can't apply differently by row. PII
+          exposure here is bounded by restricted schema access instead. See model SQL.
+        meta: {pii: true, masking_required: true, masking_policy: null}
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [node_id, key_id]
+
+  - name: int_owner_identity_xref
+    description: >
+      Record-to-owner crosswalk. Incremental on the changed neighbourhood, full rebuild
+      weekly. Also the model that makes GDPR deletion tractable - one owner_id yields
+      every source record for that person.
+    meta: {contains_pii: true, masking_policies: [marina_email_mask, marina_phone_mask]}
+    columns:
+      - name: node_id
+        tests: [not_null, unique]
+      - name: owner_id
+        tests: [not_null]
+      - name: identity_source
+        tests:
+          - not_null
+          - accepted_values: {values: ['marina_pms', 'stripe']}
+      - name: resolution_method
+        tests:
+          - not_null
+          - accepted_values: {values: ['email', 'phone', 'hull_id', 'unresolved']}
+      - name: email
+        meta: {pii: true, pii_type: email, masking_required: true, masking_strategy: partial_redact, masking_policy: marina_email_mask}
+      - name: phone
+        meta: {pii: true, pii_type: phone, masking_required: true, masking_strategy: partial_redact, masking_policy: marina_phone_mask}
+
+  - name: int_owners
+    description: Conformed owner dimension, one row per resolved person.
+    meta: {contains_pii: true, masking_policies: [marina_name_mask, marina_email_mask, marina_phone_mask]}
+    columns:
+      - name: owner_id
+        tests: [not_null, unique]
+      - name: legal_name
+        meta: {pii: true, pii_type: name, masking_required: true, masking_strategy: partial_redact, masking_policy: marina_name_mask}
+      - name: primary_email
+        meta: {pii: true, pii_type: email, masking_required: true, masking_strategy: partial_redact, masking_policy: marina_email_mask}
+      - name: primary_phone
+        meta: {pii: true, pii_type: phone, masking_required: true, masking_strategy: partial_redact, masking_policy: marina_phone_mask}
+      - name: source_record_count
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1, inclusive: true}
+          # A cluster this large is a merge failure, not a customer. Errors, not warns.
+          - dbt_utils.accepted_range:
+              max_value: 100
+              inclusive: true
+              config: {severity: error}
+
+  - name: int_boats
+    description: Conformed boat dimension, one row per standardized hull_id.
+    columns:
+      - name: boat_id
+        tests: [not_null, unique]
+      - name: hull_id
+        tests: [not_null, unique]
+      - name: owner_id
+        tests:
+          - relationships: {to: ref('int_owners'), field: owner_id}
+      - name: has_ownership_history
+        tests:
+          - dbt_utils.expression_is_true: {expression: "= false", config: {severity: warn}}
+      - name: is_orphan_boat
+        tests:
+          - dbt_utils.expression_is_true: {expression: "= false", config: {severity: warn}}
+
+  - name: int_vendor_jobs_daily
+    description: >
+      Daily vendor aggregate. Additive measures only - sums and counts, never averages,
+      so every rollup re-aggregates correctly.
+    columns:
+      - name: job_date
+        tests: [not_null]
+      - name: vendor_name
+        tests: [not_null]
+      - name: jobs_logged
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1, inclusive: true}
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [job_date, vendor_name, service_category]
+      - dbt_utils.expression_is_true:
+          name: completed_never_exceeds_logged
+          expression: "jobs_completed <= jobs_logged"

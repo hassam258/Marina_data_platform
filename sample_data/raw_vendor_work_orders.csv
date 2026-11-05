@@ -1,0 +1,4 @@
+work_order_id,vendor_name,raw_service_type,hours_spent,status,created_at,completed_at
+WO-101,Marine Tech LLC,Engine_Overhaul_Emergency,6.5,Completed,2026-03-01 09:00:00,2026-03-01 15:30:00
+WO-102,Capt. Bob,Hull Cleaning & Paint,3.0,Completed,2026-03-02 10:00:00,2026-03-02 13:00:00
+WO-103,FastDock Inc,mech_maint_101,4.0,In Progress,2026-03-03 08:00:00,

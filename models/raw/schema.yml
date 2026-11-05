@@ -1,0 +1,102 @@
+version: 2
+
+sources:
+  - name: marina_raw
+    description: >
+      Landing zone. Loaded by the ingestion pipeline; never transformed in place.
+      At billion-row scale the loader also performs contact normalization - see
+      README > Where the work happens.
+    database: "{{ env_var('RAW_DATABASE', 'RAW') }}"
+    schema: marina_raw
+    loader: fivetran
+    meta: {owner: data-platform@marina.example, contains_pii: true}
+    freshness:
+      warn_after: {count: 12, period: hour}
+      error_after: {count: 24, period: hour}
+    loaded_at_field: "{{ var('ingestion_watermark_column') }}"
+    tables:
+      - name: raw_marina_pms
+        description: Slip bookings, boats, and customer contact details.
+        columns:
+          - name: booking_id
+            tests: [not_null]
+          - name: raw_contact
+            description: One free-text column holding EITHER an email OR a phone, unlabelled.
+            meta: {pii: true, pii_type: contact_mixed}
+          - name: customer_full_name
+            meta: {pii: true, pii_type: name}
+      - name: raw_vendor_work_orders
+        description: Vendor work orders. The high-volume source - billions projected.
+        freshness:
+          warn_after: {count: 6, period: hour}
+          error_after: {count: 48, period: hour}
+        columns:
+          - name: work_order_id
+            tests: [not_null]
+      - name: raw_stripe_subscriptions
+        description: Append-only billing event log. No status column - state is derived.
+        freshness:
+          warn_after: {count: 3, period: hour}
+          error_after: {count: 12, period: hour}
+        columns:
+          - name: sub_id
+            tests: [not_null]
+          - name: customer_email
+            meta: {pii: true, pii_type: email}
+
+models:
+  - name: raw_marina_pms
+    description: >
+      Landing copy of the PMS extract. Append-only and untyped - values are stored exactly
+      as received. Mutable bookings land one row per version, so this is the full change
+      history of every booking.
+    meta: {layer: landing, contains_pii: true, immutable: true}
+    columns:
+      - name: booking_id
+        description: Natural key. NOT unique here - one row per landed version.
+        tests: [not_null]
+      - name: _row_hash
+        description: >
+          Surrogate over the full source payload. Idempotency key for the landing
+          anti-join, and version identifier for downstream dedupe.
+        tests: [not_null]
+      - name: _ingested_at
+        description: Arrival time. Staging watermarks on this, not on business dates.
+        tests: [not_null]
+      - name: _batch_id
+        description: dbt invocation_id. Makes a bad load traceable and removable.
+        tests: [not_null]
+      - name: raw_contact
+        meta: {pii: true, pii_type: contact_mixed}
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [_row_hash, _ingestion_date]
+          config:
+            where: "_ingestion_date >= dateadd(day, -14, current_date)"
+
+  - name: raw_vendor_work_orders
+    description: >
+      Landing copy of the vendor extract. The high-volume table - in production this
+      becomes an external table over the loader's Iceberg output.
+    meta: {layer: landing, immutable: true}
+    columns:
+      - name: work_order_id
+        tests: [not_null]
+      - name: _row_hash
+        tests: [not_null]
+      - name: _ingested_at
+        tests: [not_null]
+
+  - name: raw_stripe_subscriptions
+    description: Landing copy of the billing event extract. Events are immutable at source.
+    meta: {layer: landing, contains_pii: true, immutable: true}
+    columns:
+      - name: sub_id
+        tests: [not_null]
+      - name: _row_hash
+        description: Doubles as the event identity - re-reading an event lands nothing.
+        tests: [not_null]
+      - name: _ingested_at
+        tests: [not_null]
+      - name: customer_email
+        meta: {pii: true, pii_type: email}

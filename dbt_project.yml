@@ -1,0 +1,87 @@
+name: 'marina_platform'
+version: '2.0.0'
+config-version: 2
+profile: 'marina_platform'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+analysis-paths: ["analyses"]
+
+require-dbt-version: [">=1.7.0", "<2.0.0"]
+
+# Creates the Snowflake masking policy objects (no-op outside prod Snowflake) before any
+# model's post-hook tries to bind one to a column. See macros/mask_pii.sql.
+on-run-start:
+  - "{{ create_pii_masking_policies() }}"
+
+vars:
+  # Role allowed to see PII in clear text through a masking policy. Everyone else gets
+  # the masked value - see macros/mask_pii.sql.
+  pii_unmasked_role: PII_VIEWER
+
+  # ---------- incremental windows ----------
+  # Vendors file paperwork days after the job, so a max(created_at) watermark drops
+  # late arrivals. Every incremental model reprocesses a rolling window instead.
+  work_orders_lookback_days: 7
+  billing_lookback_days: 3
+  aggregate_lookback_days: 7
+
+  # ---------- identity resolution ----------
+  identity_resolution_iterations: 3
+  enable_hull_bridging: true
+  # THE MOST IMPORTANT NUMBER IN THIS PROJECT. A contact value shared by more than this
+  # many records is a data-entry default (front desk phone, noreply@, test account), not
+  # identity evidence. Without this cap one poisoned key collapses a large share of the
+  # customer base into a single owner - silently, with no error.
+  max_nodes_per_key: 50
+  # Incremental resolution heals weekly; see int_owner_identity_xref.
+  identity_full_refresh_weekday: 6
+
+  # ---------- landing ----------
+  # Window for the landing-layer duplicate anti-join. Bounds the scan; a row reappearing
+  # unchanged after this window re-lands as a harmless extra version.
+  landing_replay_days: 14
+  # How far back a MERGE may need to reach into target partitions. Covers realistic late
+  # arrival; anything older is a deliberate backfill, not a daily concern.
+  merge_window_days: 30
+  ingestion_watermark_column: _loaded_at
+
+  # ---------- business ----------
+  annual_plan_amount_is_annual_total: false
+  min_phone_digits: 7
+
+models:
+  marina_platform:
+    +persist_docs: {relation: true, columns: true}
+    # Landing: append-only, immutable, untyped. Restricted schema - it holds raw PII
+    # exactly as received.
+    raw:
+      +materialized: incremental
+      +schema: landing
+      +tags: ["raw", "landing"]
+    # NOTHING is a view. At billions of rows a view re-executes its whole lineage on
+    # every query - the single most expensive mistake available in this design.
+    staging:
+      +materialized: incremental
+      +schema: staging
+      +tags: ["staging"]
+    intermediate:
+      +materialized: table
+      +schema: intermediate
+      +tags: ["intermediate"]
+    marts:
+      +materialized: table
+      +schema: marts
+      +tags: ["marts"]
+
+seeds:
+  marina_platform:
+    +schema: seeds
+
+tests:
+  marina_platform:
+    +store_failures: true
+    +schema: dbt_test_failures
+    +limit: 5000

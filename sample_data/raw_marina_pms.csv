@@ -1,0 +1,4 @@
+booking_id,customer_full_name,raw_contact,boat_name,hull_id,slip_fee,marina_code
+BK-901,John Doe,+1 (555) 019-2834,Sea Breeze,FL-8812 AB,"$1,200.00",MIA-01
+BK-902,J. Doe,jdoe_99@gmail.com,Seabreeze,FL-8812 AB,1200,MIA-01
+BK-903,Sarah Connor,sarah.c@sky.net,Terminator II,CA 9910-X C,"$2,500.00",SAN-02

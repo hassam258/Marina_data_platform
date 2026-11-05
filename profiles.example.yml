@@ -1,0 +1,31 @@
+# Copy to ~/.dbt/profiles.yml. Credentials come from env vars, never the repo.
+marina_platform:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      authenticator: externalbrowser
+      role: TRANSFORMER_DEV
+      database: MARINA_DEV
+      warehouse: TRANSFORM_XS
+      schema: dbt_dev
+      threads: 8
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      private_key_path: "{{ env_var('SNOWFLAKE_KEY_PATH') }}"
+      role: TRANSFORMER_PROD
+      database: MARINA_PROD
+      warehouse: TRANSFORM_L      # separate from REPORTING_M so backfills can't slow BI
+      schema: analytics
+      threads: 16
+    bigquery_prod:
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('GCP_PROJECT') }}"
+      dataset: analytics
+      location: EU
+      threads: 16

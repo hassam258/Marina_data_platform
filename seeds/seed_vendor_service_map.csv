@@ -1,0 +1,4 @@
+raw_service_type,service_category,is_billable,source
+Engine_Overhaul_Emergency,Engine Maintenance,true,observed
+Hull Cleaning & Paint,Hull Service,true,observed
+mech_maint_101,Engine Maintenance,true,observed

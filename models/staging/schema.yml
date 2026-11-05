@@ -1,0 +1,85 @@
+version: 2
+
+models:
+  - name: stg_marina_pms
+    description: >
+      Cleaned bookings, one row per booking_id - the LATEST landed version of each.
+      raw_contact split into typed email/phone.
+    meta: {contains_pii: true, masking_policies: [marina_name_mask, marina_email_mask, marina_phone_mask]}
+    columns:
+      - name: booking_id
+        tests:
+          - not_null
+          # SCALE NOTE: uniqueness is scoped to the freshly merged slice. A full-table
+          # self-join on a billion rows every run is not affordable; the full check runs
+          # weekly via the `full_refresh` selector.
+          - unique:
+              config:
+                where: "dbt_loaded_at >= dateadd(day, -2, current_timestamp())"
+      - name: customer_full_name
+        meta: {pii: true, pii_type: name, masking_required: true, masking_strategy: partial_redact, masking_policy: marina_name_mask, retention_days: 2555}
+      - name: customer_email
+        meta: {pii: true, pii_type: email, masking_required: true, masking_strategy: partial_redact, masking_policy: marina_email_mask, retention_days: 2555}
+      - name: customer_phone
+        meta: {pii: true, pii_type: phone, masking_required: true, masking_strategy: partial_redact, masking_policy: marina_phone_mask, retention_days: 2555}
+      - name: contact_type
+        tests:
+          - not_null
+          - accepted_values: {values: ['email', 'phone', 'unparseable']}
+      - name: slip_fee
+        tests:
+          - dbt_utils.accepted_range: {min_value: 0, inclusive: true, config: {severity: warn}}
+
+  - name: stg_vendor_work_orders
+    description: >
+      Cleaned work orders with seed-mapped service categories. Partitioned daily,
+      clustered on (vendor_name, status), merged on a rolling window.
+    columns:
+      - name: work_order_id
+        tests:
+          - not_null
+          - unique:
+              config:
+                where: "created_at_utc >= dateadd(day, -7, current_timestamp())"
+      - name: service_category
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Engine Maintenance', 'Hull Service', 'Dockage', 'Electrical', 'Other']
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Completed', 'In Progress', 'Scheduled', 'Cancelled', 'On Hold']
+      - name: created_at_utc
+        tests: [not_null]
+      - name: completed_at_utc
+        tests:
+          - not_null: {config: {where: "status = 'Completed'"}}
+      - name: turnaround_hours
+        tests:
+          - dbt_utils.accepted_range: {min_value: 0, inclusive: true, config: {severity: warn}}
+      - name: hours_spent
+        tests:
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 24, inclusive: true, config: {severity: warn}}
+
+  - name: stg_stripe_subscriptions
+    description: Cleaned billing events, one row per event. Append-only.
+    meta: {contains_pii: true, masking_policies: [marina_email_mask]}
+    columns:
+      - name: sub_event_id
+        tests:
+          - not_null
+          - unique:
+              config:
+                where: "event_timestamp_utc >= dateadd(day, -3, current_timestamp())"
+      - name: sub_id
+        description: NOT unique - this is an event log.
+        tests: [not_null]
+      - name: customer_email
+        meta: {pii: true, pii_type: email, masking_required: true, masking_strategy: partial_redact, masking_policy: marina_email_mask}
+      - name: billing_interval
+        tests:
+          - accepted_values: {values: ['monthly', 'annual']}
+      - name: event_timestamp_utc
+        tests: [not_null]
